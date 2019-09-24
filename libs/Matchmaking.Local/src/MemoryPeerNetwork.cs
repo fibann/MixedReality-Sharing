@@ -12,14 +12,12 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
     class MemoryPeerNetworkMessage : IPeerNetworkMessage
     {
         internal MemoryPeerNetwork sender_;
-        public Guid StreamId { get; }
         public ArraySegment<byte> Contents { get; }
 
-        internal MemoryPeerNetworkMessage(MemoryPeerNetwork sender, Guid streamId, ArraySegment<byte> contents)
+        internal MemoryPeerNetworkMessage(MemoryPeerNetwork sender, ArraySegment<byte> contents)
         {
             sender_ = sender;
             Contents = contents;
-            StreamId = streamId;
         }
     }
 
@@ -66,9 +64,9 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         public event Action<IPeerNetwork, IPeerNetworkMessage> Message;
 
-        public void Broadcast(Guid streamId, ArraySegment<byte> message)
+        public void Broadcast(ArraySegment<byte> message)
         {
-            var m = new MemoryPeerNetworkMessage(this, streamId, message);
+            var m = new MemoryPeerNetworkMessage(this, message);
             foreach (var c in instances_)
             {
                 c.incoming_.Enqueue(m);
@@ -76,10 +74,10 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             PumpNetwork();
         }
 
-        public void Reply(IPeerNetworkMessage req, Guid streamId, ArraySegment<byte> message)
+        public void Reply(IPeerNetworkMessage req, ArraySegment<byte> message)
         {
             var r = req as MemoryPeerNetworkMessage;
-            var m = new MemoryPeerNetworkMessage(this, streamId, message);
+            var m = new MemoryPeerNetworkMessage(this, message);
             r.sender_.incoming_.Enqueue(m);
             PumpNetwork();
         }

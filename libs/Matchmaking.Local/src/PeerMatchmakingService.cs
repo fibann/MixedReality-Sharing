@@ -130,7 +130,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         // network helpers
 
-        internal static void Broadcast(IPeerNetwork net, Guid streamId, Action<BinaryWriter> cb)
+        internal static void Broadcast(IPeerNetwork net, Action<BinaryWriter> cb)
         {
             byte[] buffer = new byte[1024];
             using (var str = new MemoryStream(buffer))
@@ -138,11 +138,11 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             {
                 cb.Invoke(writer);
                 writer.Flush();
-                net.Broadcast(streamId, new ArraySegment<byte>(buffer, 0, (int)str.Position));
+                net.Broadcast(new ArraySegment<byte>(buffer, 0, (int)str.Position));
             }
         }
 
-        internal static void Reply(IPeerNetwork net, IPeerNetworkMessage msg, Guid streamId, Action<BinaryWriter> cb)
+        internal static void Reply(IPeerNetwork net, IPeerNetworkMessage msg, Action<BinaryWriter> cb)
         {
             byte[] buffer = new byte[1024];
             using (var str = new MemoryStream(buffer))
@@ -150,7 +150,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             {
                 cb.Invoke(writer);
                 writer.Flush();
-                net.Reply(msg, streamId, new ArraySegment<byte>(buffer, 0, (int)str.Position));
+                net.Reply(msg, new ArraySegment<byte>(buffer, 0, (int)str.Position));
             }
         }
     }
@@ -171,8 +171,8 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
         private const int ClientQuery = ('C' << 24) | ('Q' << 16) | ('R' << 8) | 'Y';
         private const int MaxNumAttrs = 1024;
 
-        internal delegate void ServerAnnounceCallback(IPeerNetworkMessage msg, string category, string connection, long expiresFileTime, Dictionary<string, string> attributes);
-        internal delegate void ServerByeByeCallback(IPeerNetworkMessage msg);
+        internal delegate void ServerAnnounceCallback(IPeerNetworkMessage msg, string category, Guid guid, string connection, long expiresFileTime, Dictionary<string, string> attributes);
+        internal delegate void ServerByeByeCallback(IPeerNetworkMessage msg, Guid[] rooms);
         internal delegate void ClientQueryCallback(IPeerNetworkMessage msg, string category);
 
         IPeerNetwork net_;
@@ -211,6 +211,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             using (var br = new BinaryReader(ms))
             {
                 var cat = br.ReadString();
+                var uid = new Guid(br.ReadBytes(16));
                 var con = br.ReadString();
                 var expiresDelta = br.ReadInt32();
                 if (expiresDelta < 0)
@@ -230,13 +231,27 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
                     var v = br.ReadString();
                     attrs.Add(k, v);
                 }
-                callback(msg, cat, con, expires, attrs);
+                callback(msg, cat, uid, con, expires, attrs);
             }
         }
 
         private static void DecodeServerByeBye(ServerByeByeCallback callback, IPeerNetworkMessage msg)
         {
-            callback(msg);
+            using (var ms = new MemoryStream(msg.Contents.Array, msg.Contents.Offset + 4, msg.Contents.Count - 4, false))
+            using (var br = new BinaryReader(ms))
+            {
+                int numRemoved = br.ReadInt32();
+                if (numRemoved <= 0)
+                {
+                    return;
+                }
+                var toRemove = new Guid[numRemoved];
+                for (int i = 0; i < numRemoved; ++i)
+                {
+                    toRemove[i] = new Guid(br.ReadBytes(16));
+                }
+                callback(msg, toRemove);
+            }
         }
 
         private static void DecodeClientQuery(ClientQueryCallback callback, IPeerNetworkMessage msg)
@@ -253,25 +268,26 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         internal void SendServerReply(IPeerNetworkMessage msg, string category, Guid uniqueId, string connection, int expirySeconds, IReadOnlyCollection<KeyValuePair<string, string>> attributes)
         {
-            Extensions.Reply(net_, msg, uniqueId, w =>
+            Extensions.Reply(net_, msg, w =>
             {
                 w.Write(Proto.ServerReply);
-                _SendRoomInfo(w, category, connection, expirySeconds, attributes);
+                _SendRoomInfo(w, category, uniqueId, connection, expirySeconds, attributes);
             });
         }
 
         internal void SendServerHello(string category, Guid uniqueId, string connection, int expirySeconds, IReadOnlyCollection<KeyValuePair<string, string>> attributes)
         {
-            Extensions.Broadcast(net_, uniqueId, w =>
+            Extensions.Broadcast(net_, w =>
             {
                 w.Write(Proto.ServerReply);
-                _SendRoomInfo(w, category, connection, expirySeconds, attributes);
+                _SendRoomInfo(w, category, uniqueId, connection, expirySeconds, attributes);
             });
         }
 
-        private void _SendRoomInfo(BinaryWriter w, string category, string connection, int expirySeconds, IReadOnlyCollection<KeyValuePair<string, string>> attributes)
+        private void _SendRoomInfo(BinaryWriter w, string category, Guid uniqueId, string connection, int expirySeconds, IReadOnlyCollection<KeyValuePair<string, string>> attributes)
         {
             w.Write(category);
+            w.Write(uniqueId.ToByteArray());
             w.Write(connection);
             w.Write(expirySeconds);
             w.Write(attributes.Count);
@@ -282,17 +298,22 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             }
         }
 
-        internal void SendServerByeBye(Guid guid)
+        internal void SendServerByeBye(ICollection<Guid> rooms)
         {
-            Extensions.Broadcast(net_, guid, w =>
+            Extensions.Broadcast(net_, w =>
             {
                 w.Write(Proto.ServerByeBye);
+                w.Write(rooms.Count);
+                foreach(var id in rooms)
+                {
+                    w.Write(id.ToByteArray());
+                }
             });
         }
 
         internal void SendClientQuery(string category)
         {
-            Extensions.Broadcast(net_, Guid.NewGuid() /* TODO */, (BinaryWriter w) =>
+            Extensions.Broadcast(net_, (BinaryWriter w) =>
             {
                 w.Write(Proto.ClientQuery);
                 w.Write(category);
@@ -425,10 +446,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             {
                 stopAllAnnouncements_ = true;
             }
-            foreach (var guid in data)
-            {
-                proto_.SendServerByeBye(guid);
-            }
+            proto_.SendServerByeBye(data);
             proto_.Stop();
         }
 
@@ -582,9 +600,6 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         /// The list of all local rooms of all categories
         IDictionary<string, CategoryInfo> infoFromCategory_ = new Dictionary<string, CategoryInfo>();
-
-        /// Reverse map room ID -> category.
-        IDictionary<Guid, string> categoryFromRoomId_ = new Dictionary<Guid, string>();
 
         /// Protocol handler.
         Proto proto_;
@@ -780,7 +795,6 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
                         foreach (var exp in expired)
                         {
                             info.roomsRemote_.Remove(exp);
-                            categoryFromRoomId_.Remove(exp);
                         }
                         updatedTasks.AddRange(info.tasks_);
                     }
@@ -799,10 +813,9 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
         }
 
         // The body of ServerHello and ServerReply is identical so we reuse the code.
-        private void OnServerAnnounce(IPeerNetworkMessage msg, string category, string connection, long expiresFileTime, Dictionary<string, string> attributes)
+        private void OnServerAnnounce(IPeerNetworkMessage msg, string category, Guid guid, string connection, long expiresFileTime, Dictionary<string, string> attributes)
         {
             DiscoveryTask[] tasksUpdated = null;
-            var guid = msg.StreamId;
             lock (this)
             {
                 // see if the category is relevant to us, we created an info in StartDiscovery if so.
@@ -817,7 +830,6 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
                 {
                     room = new RemoteRoom(category, guid, connection, attributes, expiresFileTime);
                     info.roomsRemote_[guid] = room;
-                    categoryFromRoomId_[guid] = category;
                     updated = true;
                 }
                 else // existing room, has it changed?
@@ -861,23 +873,68 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             }
         }
 
-        private void OnServerByeBye(IPeerNetworkMessage msg)
+        private void OnServerByeBye(IPeerNetworkMessage msg, Guid[] rooms)
         {
-            var guid = msg.StreamId;
-            DiscoveryTask[] tasksUpdated = Array.Empty<DiscoveryTask>();
-            lock(this)
+            if (rooms.Length == 0)
             {
-                if (categoryFromRoomId_.TryGetValue(guid, out string category))
-                {
-                    categoryFromRoomId_.Remove(guid);
-                    var info = infoFromCategory_[category];
-                    info.roomsRemote_.Remove(guid);
-                    info.roomSerial_ += 1;
-                    tasksUpdated = info.tasks_.ToArray();
-                }
+                return;
             }
 
-            foreach (var t in tasksUpdated)
+            // Search for all the rooms in the local map and remove them. Sort the rooms to make it faster.
+            // todo: move to utilities, add unit tests
+            Array.Sort(rooms);
+            var remainingToRemove = new LinkedList<Guid>(rooms);
+            var tasksUpdated = new List<DiscoveryTask>();
+            lock (this)
+            {
+                foreach (var pair in infoFromCategory_)
+                {
+                    CategoryInfo info = pair.Value;
+                    bool roomsDeletedFromThisCategory = false;
+
+                    SortedDictionary<Guid, RemoteRoom> catRooms = info.roomsRemote_;
+                    var curSortedRoomGuids = catRooms.Keys.ToArray();
+
+                    // Walk the lists together.
+                    var node = remainingToRemove.First;
+                    foreach (var guid in curSortedRoomGuids)
+                    {
+                        while (node != null && node.Value.CompareTo(guid) < 0)
+                        {
+                            node = node.Next;
+                        }
+                        if (node == null)
+                        {
+                            break;
+                        }
+                        if (node.Value == guid)
+                        {
+                            // Found match.
+                            // Remove from local map.
+                            info.roomsRemote_.Remove(guid);
+                            info.roomSerial_ += 1;
+
+                            // Remove from list too so we don't search for this .
+                            var next = node.Next;
+                            remainingToRemove.Remove(node);
+                            node = next;
+
+                            roomsDeletedFromThisCategory = true;
+                        }
+                    }
+
+                    if (roomsDeletedFromThisCategory)
+                    {
+                        tasksUpdated.AddRange(info.tasks_);
+                    }
+
+                    if (!remainingToRemove.Any())
+                    {
+                        break;
+                    }
+                }
+            }
+            foreach (var t in tasksUpdated) // outside the lock
             {
                 t.FireUpdated();
             }

@@ -13,14 +13,6 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
     /// </remarks>
     public interface IPeerNetworkMessage
     {
-        /// <summary>
-        /// Stream that the packet belongs to. See <see cref="IPeerNetwork.Broadcast(Guid, ArraySegment{byte})"/>.
-        /// </summary>
-        Guid StreamId { get; }
-
-        /// <summary>
-        /// Message payload.
-        /// </summary>
         ArraySegment<byte> Contents { get; }
     }
 
@@ -48,21 +40,13 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
         /// <summary>
         /// Send a message to all others in this network.
         /// </summary>
-        /// <param name="streamId">
-        /// Associates the message to a stream. Messages from the same stream will be delivered in order.
-        /// No guarantees are made on messages from different stream.
-        /// </param>
         /// <param name="message">The buffer containing the message to send</param>
-        void Broadcast(Guid streamId, ArraySegment<byte> message);
+        void Broadcast(ArraySegment<byte> message);
 
         /// <summary>
         /// Reply to a message. (Typically a broadcast message)
         /// </summary>
-        /// <param name="streamId">
-        /// Associates the message to a stream. Messages from the same stream will be delivered in order.
-        /// No guarantees are made on messages from different stream.
-        /// </param>
         /// <param name="message">The buffer containing the message to send</param>
-        void Reply(IPeerNetworkMessage inResponseTo, Guid streamId, ArraySegment<byte> message);
+        void Reply(IPeerNetworkMessage inResponseTo, ArraySegment<byte> message);
     }
 }
