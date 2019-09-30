@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Threading.Tasks;
 
 namespace Microsoft.MixedReality.Sharing.Matchmaking
 {
@@ -54,7 +55,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
         /// for messages that do not need ordering.
         /// </param>
         /// <param name="message">The buffer containing the message to send</param>
-        void Broadcast(Guid streamId, ArraySegment<byte> message);
+        Task BroadcastAsync(Guid streamId, ArraySegment<byte> message);
 
         /// <summary>
         /// Reply to a message. (Typically a broadcast message)
@@ -65,6 +66,6 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
         /// for messages that do not need ordering.
         /// </param>
         /// <param name="message">The buffer containing the message to send</param>
-        void Reply(IPeerDiscoveryMessage inResponseTo, Guid streamId, ArraySegment<byte> message);
+        Task ReplyAsync(IPeerDiscoveryMessage inResponseTo, Guid streamId, ArraySegment<byte> message);
     }
 }

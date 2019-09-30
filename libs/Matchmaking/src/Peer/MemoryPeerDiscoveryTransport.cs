@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Microsoft.MixedReality.Sharing.Matchmaking
 {
@@ -70,7 +71,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         public event Action<IPeerDiscoveryTransport, IPeerDiscoveryMessage> Message;
 
-        public void Broadcast(Guid streamId, ArraySegment<byte> message)
+        public Task BroadcastAsync(Guid streamId, ArraySegment<byte> message)
         {
             var m = new MemoryPeerDiscoveryMessage(this, streamId, message);
             foreach (var c in instances_)
@@ -78,14 +79,16 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
                 c.incoming_.Enqueue(m);
             }
             PumpMessages();
+            return Task.CompletedTask;
         }
 
-        public void Reply(IPeerDiscoveryMessage req, Guid streamId, ArraySegment<byte> message)
+        public Task ReplyAsync(IPeerDiscoveryMessage req, Guid streamId, ArraySegment<byte> message)
         {
             var r = req as MemoryPeerDiscoveryMessage;
             var m = new MemoryPeerDiscoveryMessage(this, streamId, message);
             r.sender_.incoming_.Enqueue(m);
             PumpMessages();
+            return Task.CompletedTask;
         }
 
         static protected void PumpMessagesInternal()

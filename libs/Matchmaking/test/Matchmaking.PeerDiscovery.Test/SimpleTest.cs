@@ -50,7 +50,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking.Test
 
             var net = new UdpPeerDiscoveryTransport(new IPAddress(0x000000e0), 45280);
             net.Start();
-            net.Broadcast(Guid.Empty, new System.ArraySegment<byte>(new byte[2048]));
+            net.BroadcastAsync(Guid.Empty, new System.ArraySegment<byte>(new byte[2048]));
             net.Stop();
 
             Trace.Flush();

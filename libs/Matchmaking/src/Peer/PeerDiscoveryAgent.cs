@@ -106,7 +106,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         // transport helpers
 
-        internal static void Broadcast(IPeerDiscoveryTransport net, Guid streamId, Action<BinaryWriter> cb)
+        internal static Task BroadcastAsync(IPeerDiscoveryTransport net, Guid streamId, Action<BinaryWriter> cb)
         {
             byte[] buffer = new byte[1024];
             using (var str = new MemoryStream(buffer))
@@ -114,11 +114,11 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             {
                 cb.Invoke(writer);
                 writer.Flush();
-                net.Broadcast(streamId, new ArraySegment<byte>(buffer, 0, (int)str.Position));
+                return net.BroadcastAsync(streamId, new ArraySegment<byte>(buffer, 0, (int)str.Position));
             }
         }
 
-        internal static void Reply(IPeerDiscoveryTransport net, IPeerDiscoveryMessage msg, Guid streamId, Action<BinaryWriter> cb)
+        internal static Task ReplyAsync(IPeerDiscoveryTransport net, IPeerDiscoveryMessage msg, Guid streamId, Action<BinaryWriter> cb)
         {
             byte[] buffer = new byte[1024];
             using (var str = new MemoryStream(buffer))
@@ -126,7 +126,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             {
                 cb.Invoke(writer);
                 writer.Flush();
-                net.Reply(msg, streamId, new ArraySegment<byte>(buffer, 0, (int)str.Position));
+                return net.ReplyAsync(msg, streamId, new ArraySegment<byte>(buffer, 0, (int)str.Position));
             }
         }
     }
@@ -229,7 +229,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         internal void SendServerReply(IPeerDiscoveryMessage msg, string category, Guid uniqueId, string connection, int expirySeconds, IReadOnlyCollection<KeyValuePair<string, string>> attributes)
         {
-            Extensions.Reply(transport_, msg, uniqueId, w =>
+            Extensions.ReplyAsync(transport_, msg, uniqueId, w =>
             {
                 w.Write(Proto.ServerReply);
                 _SendResourceInfo(w, category, connection, expirySeconds, attributes);
@@ -238,7 +238,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         internal void SendServerHello(string category, Guid uniqueId, string connection, int expirySeconds, IReadOnlyCollection<KeyValuePair<string, string>> attributes)
         {
-            Extensions.Broadcast(transport_, uniqueId, w =>
+            Extensions.BroadcastAsync(transport_, uniqueId, w =>
             {
                 w.Write(Proto.ServerReply);
                 _SendResourceInfo(w, category, connection, expirySeconds, attributes);
@@ -258,9 +258,9 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             }
         }
 
-        internal void SendServerByeBye(Guid guid)
+        internal Task SendServerByeByeAsync(Guid guid)
         {
-            Extensions.Broadcast(transport_, guid, w =>
+            return Extensions.BroadcastAsync(transport_, guid, w =>
             {
                 w.Write(Proto.ServerByeBye);
             });
@@ -268,7 +268,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
 
         internal void SendClientQuery(string category)
         {
-            Extensions.Broadcast(transport_, Guid.Empty, (BinaryWriter w) =>
+            Extensions.BroadcastAsync(transport_, Guid.Empty, (BinaryWriter w) =>
             {
                 w.Write(Proto.ClientQuery);
                 w.Write(category);
@@ -392,7 +392,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             }
         }
 
-        internal void Stop()
+        internal Task StopAsync()
         {
             Guid[] data;
             lock (this)
@@ -407,11 +407,13 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             {
                 stopAllAnnouncements_ = true;
             }
+            var byeByeTasks = new List<Task>(data.Length);
             foreach (var guid in data)
             {
-                proto_.SendServerByeBye(guid);
+                byeByeTasks.Add(proto_.SendServerByeByeAsync(guid));
             }
             proto_.Stop();
+            return Task.WhenAll(byeByeTasks);
         }
 
         private void UpdateAnnounceTimer()
@@ -957,18 +959,19 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking
             if (!isDisposed_)
             {
                 isDisposed_ = true;
-                server_?.Stop();
                 client_?.Stop();
-
-                // Give some time for the ByeBye message to be sent before shutting down the sockets.
-                // todo is there a smarter way to do this?
-                Task.Delay(1).Wait();
-
-                // Stop the network and prevent later disposals from trying to stop it again.
-                if (Interlocked.Exchange(ref transportRefCount_, 0) > 0)
+                server_?.StopAsync().ContinueWith(_ =>
                 {
-                    transport_.Stop();
-                }
+                    // Give some time for the ByeBye message to be sent before shutting down the sockets.
+                    // todo is there a smarter way to do this?
+                    Task.Delay(1).Wait();
+
+                    // Stop the network and prevent later disposals from trying to stop it again.
+                    if (Interlocked.Exchange(ref transportRefCount_, 0) > 0)
+                    {
+                        transport_.Stop();
+                    }
+                });
             }
         }
     }

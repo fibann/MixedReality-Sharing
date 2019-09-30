@@ -254,20 +254,27 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking.Test
     {
         private const int MaxDelayMs = 25;
         private const ushort Port = 45279;
+        private const int MaxRetries = 3;
 
         private readonly Socket relay_;
         private readonly Random random_;
         private readonly ITestOutputHelper output_;
         private readonly List<IPEndPoint> recipients_ = new List<IPEndPoint>();
 
+        //
+        private readonly Dictionary<EndPoint, int> dropCounters_ = new Dictionary<EndPoint, int>();
+
         private IDiscoveryAgent MakeDiscoveryAgent(int userIndex)
         {
             // Peers all send packets to the relay.
             var address = new IPAddress(0x0000007f + (userIndex << 24));
-            var net = new UdpPeerDiscoveryTransport(new IPAddress(0xfeffff7f), Port, address);
+            var net = new UdpPeerDiscoveryTransport(new IPAddress(0xfeffff7f), Port, address,
+                new UdpPeerDiscoveryTransport.Options { MaxRetries = MaxRetries, MaxRetryDelay = 100 });
             lock(recipients_)
             {
-                recipients_.Add(new IPEndPoint(address, Port));
+                var endpoint = new IPEndPoint(address, Port);
+                recipients_.Add(endpoint);
+                dropCounters_.Add(endpoint, random_.Next(0, MaxRetries));
             }
             return new PeerDiscoveryAgent(net, new PeerDiscoveryAgent.Options { ResourceExpirySec = int.MaxValue });
         }
@@ -297,7 +304,14 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking.Test
                     while (true)
                     {
                         byte[] buf_ = new byte[1024];
-                        var result = await relay_.ReceiveAsync(new ArraySegment<byte>(buf_), SocketFlags.None);
+                        var result = await relay_.ReceiveFromAsync(new ArraySegment<byte>(buf_), SocketFlags.None, new IPEndPoint(IPAddress.Any, 0));
+
+                        int shouldDrop = dropCounters_[result.RemoteEndPoint];
+                        dropCounters_[result.RemoteEndPoint] = (shouldDrop + 1) % MaxRetries;
+                        if (shouldDrop == 0)
+                        {
+                            continue;
+                        }
 
                         // The relay sends the packets to all peers with a random delay.
                         IPEndPoint[] curRecipients;
@@ -312,7 +326,7 @@ namespace Microsoft.MixedReality.Sharing.Matchmaking.Test
                             {
                                 try
                                 {
-                                    relay_.SendToAsync(new ArraySegment<byte>(buf_, 0, result), SocketFlags.None, rec);
+                                    relay_.SendToAsync(new ArraySegment<byte>(buf_, 0, result.ReceivedBytes), SocketFlags.None, rec);
                                 }
                                 catch (ObjectDisposedException) { }
                                 catch (SocketException e) when (e.SocketErrorCode == SocketError.NotSocket) { }
